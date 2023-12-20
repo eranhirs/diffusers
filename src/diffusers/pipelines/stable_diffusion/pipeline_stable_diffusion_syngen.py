@@ -105,6 +105,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             subtrees_indices: Optional[List[List[str]]] = None,
             syngen_step_size: float = 20.0,
             num_intervention_steps: int = 25,
+            include_entities: bool = False
     ):
         r"""
         The call function to the pipeline for generation.
@@ -169,7 +170,8 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 Controls the step size of each SynGen update.
             num_intervention_steps ('int', *optional*, defaults to 25):
                 The number of times we apply SynGen.
-            parsed_prompt (`str`, *optional*, default to None).
+            include_entities ('bool', *optional*, defaults to `False`):
+                Whether or not to include entities in the loss calculation.
 
 
         Examples:
@@ -276,6 +278,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                         cross_attention_kwargs,
                         prompt,
                         subtrees_indices,
+                        include_entities=include_entities,
                         num_intervention_steps=num_intervention_steps,
                     )
 
@@ -352,7 +355,8 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             cross_attention_kwargs,
             prompt,
             subtrees_indices,
-            num_intervention_steps,
+            include_entities: bool,
+            num_intervention_steps: int,
     ):
         with torch.enable_grad():
             latents = latents.clone().detach().requires_grad_(True)
@@ -372,7 +376,10 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 self.unet.zero_grad()
                 # Get attention maps
                 attention_maps = self._aggregate_and_get_attention_maps_per_token()
-                loss = self._compute_loss(attention_maps=attention_maps, prompt=prompt, subtrees_indices=subtrees_indices)
+                loss = self._compute_loss(attention_maps=attention_maps,
+                                          prompt=prompt,
+                                          subtrees_indices=subtrees_indices,
+                                          include_entities=include_entities)
                 # Perform gradient update
                 if i < num_intervention_steps:
                     if loss != 0:
@@ -389,10 +396,11 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
     def _compute_loss(
             self, attention_maps: List[torch.Tensor], prompt: Union[str, List[str]],
-            subtrees_indices
+            subtrees_indices,
+            include_entities: bool
     ) -> torch.Tensor:
         attn_map_idx_to_wp = get_attention_map_index_to_wordpiece(self.tokenizer, prompt)
-        loss = self._attribution_loss(attention_maps, prompt, attn_map_idx_to_wp, subtrees_indices)
+        loss = self._attribution_loss(attention_maps, prompt, attn_map_idx_to_wp, subtrees_indices, include_entities)
 
         return loss
 
@@ -401,12 +409,13 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             attention_maps: List[torch.Tensor],
             prompt: Union[str, List[str]],
             attn_map_idx_to_wp,
-            subtrees_indices
+            subtrees_indices,
+            include_entities: bool
     ) -> torch.Tensor:
         if not subtrees_indices:
             self._load_parser()
 
-            subtrees_indices = self._extract_attribution_indices(prompt)
+            subtrees_indices = self._extract_attribution_indices(prompt, include_entities)
         loss = 0
 
         for subtree_indices in subtrees_indices:
@@ -509,7 +518,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         return paired_indices
 
-    def _extract_attribution_indices(self, prompt):
+    def _extract_attribution_indices(self, prompt: str, include_entities: bool):
         """
         Find syntactic <entity, visual-attribute> pairs in the prompt
         """
@@ -518,34 +527,32 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         modifier_indices = []
         # extract standard attribution indices
-        modifier_sets_1 = extract_attribution_indices(self.doc, self.include_nummod)
+        modifier_sets_1 = extract_attribution_indices(doc)
         modifier_indices_1 = self._align_indices(prompt, modifier_sets_1)
         if modifier_indices_1:
             modifier_indices.append(modifier_indices_1)
 
         # extract attribution indices with verbs in between
-        modifier_sets_2 = extract_attribution_indices_with_verb_root(self.doc, self.include_nummod)
+        modifier_sets_2 = extract_attribution_indices_with_verb_root(doc)
         modifier_indices_2 = self._align_indices(prompt, modifier_sets_2)
         if modifier_indices_2:
             modifier_indices.append(modifier_indices_2)
 
-        modifier_sets_3 = extract_attribution_indices_with_verbs(self.doc, self.include_nummod)
+        modifier_sets_3 = extract_attribution_indices_with_verbs(doc)
         modifier_indices_3 = self._align_indices(prompt, modifier_sets_3)
         if modifier_indices_3:
             modifier_indices.append(modifier_indices_3)
 
         # entities only
-        if self.include_entities:
-            modifier_sets_4 = extract_entities_only(self.doc)
+        if include_entities:
+            modifier_sets_4 = extract_entities_only(doc)
             modifier_indices_4 = self._align_indices(prompt, modifier_sets_4)
             modifier_indices.append(modifier_indices_4)
 
         # make sure there are no duplicates
         modifier_indices = unify_lists(modifier_indices)
-
-        # remove all indices greater than 77:
-        modifier_indices = truncate_extracted_indices(modifier_indices)
         print(f"Final modifier indices collected:{modifier_indices}")
+
         return modifier_indices
 
 
@@ -596,20 +603,6 @@ def unify_lists(list_of_lists):
         lst = merged_list
 
     return lst
-
-
-def truncate_extracted_indices(nested_list):
-    filtered_list = []
-    for element in nested_list:
-        if isinstance(element, list):  # If it's a list, apply the function recursively
-            filtered_sublist = truncate_extracted_indices(element)
-            if filtered_sublist:  # Only add non-empty lists
-                filtered_list.append(filtered_sublist)
-        elif element <= last_token_idx:  # If it's a number less than or equal to 76, keep it
-            filtered_list.append(element)
-
-    return filtered_list
-
 
 
 start_token = "<|startoftext|>"
