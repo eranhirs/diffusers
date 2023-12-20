@@ -104,9 +104,10 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             callback_steps: int = 1,
             cross_attention_kwargs: Optional[Dict[str, Any]] = None,
             guidance_rescale: float = 0.0,
-            attn_res: Optional[Tuple[int]] = (16, 16),
+            attn_res=None,
             subtrees_indices: Optional[List[List[str]]] = None,
-            syngen_step_size: float = 20.0
+            syngen_step_size: float = 20.0,
+            num_intervention_steps: int = 25,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -169,6 +170,10 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 Index pairs mapping between entities and their visual attributes in the prompt.
             syngen_step_size (`float`, *optional*, default to 20.0):
                 Controls the step size of each SynGen update.
+            num_intervention_steps ('int', *optional*, defaults to 25):
+                The number of times we apply SynGen.
+            parsed_prompt (`str`, *optional*, default to None).
+
 
         Examples:
 
@@ -180,174 +185,165 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 "not-safe-for-work" (nsfw) content.
         """
 
-        try:
+        # 0. Default height and width to unet
+        height = height or self.unet.config.sample_size * self.vae_scale_factor
+        width = width or self.unet.config.sample_size * self.vae_scale_factor
 
-            # 0. Default height and width to unet
-            height = height or self.unet.config.sample_size * self.vae_scale_factor
-            width = width or self.unet.config.sample_size * self.vae_scale_factor
+        # 1. Check inputs. Raise error if not correct
+        self.check_inputs(
+            prompt,
+            height,
+            width,
+            callback_steps,
+            negative_prompt,
+            prompt_embeds,
+            negative_prompt_embeds,
+        )
 
-            # 1. Check inputs. Raise error if not correct
-            self.check_inputs(
-                prompt,
-                height,
-                width,
-                callback_steps,
-                negative_prompt,
-                prompt_embeds,
-                negative_prompt_embeds,
-            )
+        # 2. Define call parameters
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
 
-            # 2. Define call parameters
-            if prompt is not None and isinstance(prompt, str):
-                batch_size = 1
-            elif prompt is not None and isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = prompt_embeds.shape[0]
+        device = self._execution_device
+        # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+        # corresponds to doing no classifier free guidance.
+        do_classifier_free_guidance = guidance_scale > 1.0
 
-            device = self._execution_device
-            # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-            # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
-            # corresponds to doing no classifier free guidance.
-            do_classifier_free_guidance = guidance_scale > 1.0
+        # 3. Encode input prompt
+        text_encoder_lora_scale = (
+            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
+        )
+        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+            prompt,
+            device,
+            num_images_per_prompt,
+            do_classifier_free_guidance,
+            negative_prompt,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            lora_scale=text_encoder_lora_scale,
+        )
+        # For classifier free guidance, we need to do two forward passes.
+        # Here we concatenate the unconditional and text embeddings into a single batch
+        # to avoid doing two forward passes
+        if do_classifier_free_guidance:
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
 
-            # 3. Encode input prompt
-            text_encoder_lora_scale = (
-                cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-            )
-            prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-                prompt,
-                device,
-                num_images_per_prompt,
-                do_classifier_free_guidance,
-                negative_prompt,
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                lora_scale=text_encoder_lora_scale,
-            )
-            # For classifier free guidance, we need to do two forward passes.
-            # Here we concatenate the unconditional and text embeddings into a single batch
-            # to avoid doing two forward passes
-            if do_classifier_free_guidance:
-                prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
+        # 4. Prepare timesteps
+        self.scheduler.set_timesteps(num_inference_steps, device=device)
+        timesteps = self.scheduler.timesteps
 
-            # 4. Prepare timesteps
-            self.scheduler.set_timesteps(num_inference_steps, device=device)
-            timesteps = self.scheduler.timesteps
+        # 5. Prepare latent variables
+        num_channels_latents = self.unet.config.in_channels
+        latents = self.prepare_latents(
+            batch_size * num_images_per_prompt,
+            num_channels_latents,
+            height,
+            width,
+            prompt_embeds.dtype,
+            device,
+            generator,
+            latents,
+        )
 
-            # 5. Prepare latent variables
-            num_channels_latents = self.unet.config.in_channels
-            latents = self.prepare_latents(
-                batch_size * num_images_per_prompt,
-                num_channels_latents,
-                height,
-                width,
-                prompt_embeds.dtype,
-                device,
-                generator,
-                latents,
-            )
+        # 6. Prepare extra step kwargs.
+        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
-            # 6. Prepare extra step kwargs.
-            extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+        # NEW - stores the attention calculated in the unet
+        if attn_res is None:
+            attn_res = int(np.ceil(width / 32)), int(np.ceil(height / 32))
+        self.attention_store = AttentionStore(attn_res)
+        self.register_attention_control()
 
-            # NEW - stores the attention calculated in the unet
-            if attn_res is None:
-                attn_res = int(np.ceil(width / 32)), int(np.ceil(height / 32))
-            self.attention_store = AttentionStore(attn_res)
-            self.register_attention_control()
+        text_embeddings = (
+            prompt_embeds[batch_size * num_images_per_prompt:] if do_classifier_free_guidance else prompt_embeds
+        )
 
-            text_embeddings = (
-                prompt_embeds[batch_size * num_images_per_prompt:] if do_classifier_free_guidance else prompt_embeds
-            )
+        # 7. Denoising loop
+        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                # NEW
+                if i < num_intervention_steps:
+                    latents = self._syngen_step(
+                        latents,
+                        text_embeddings,
+                        t,
+                        i,
+                        syngen_step_size,
+                        cross_attention_kwargs,
+                        prompt,
+                        subtrees_indices,
+                        num_intervention_steps=num_intervention_steps,
+                    )
 
-            # 7. Denoising loop
-            num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
-            with self.progress_bar(total=num_inference_steps) as progress_bar:
-                for i, t in enumerate(timesteps):
-                    # NEW
-                    if i < 25:
-                        latents = self._syngen_step(
-                            latents,
-                            text_embeddings,
-                            t,
-                            i,
-                            syngen_step_size,
-                            cross_attention_kwargs,
-                            prompt,
-                            subtrees_indices,
-                            max_iter_to_alter=25,
+                    # expand the latents if we are doing classifier free guidance
+                    latent_model_input = (
+                        torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                    )
+                    latent_model_input = self.scheduler.scale_model_input(
+                        latent_model_input, t
+                    )
+
+                    # predict the noise residual
+                    noise_pred = self.unet(
+                        latent_model_input,
+                        t,
+                        encoder_hidden_states=prompt_embeds,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                        return_dict=False,
+                    )[0]
+
+                    # perform guidance
+                    if do_classifier_free_guidance:
+                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                        noise_pred = noise_pred_uncond + guidance_scale * (
+                                noise_pred_text - noise_pred_uncond
                         )
 
-                        # expand the latents if we are doing classifier free guidance
-                        latent_model_input = (
-                            torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                        )
-                        latent_model_input = self.scheduler.scale_model_input(
-                            latent_model_input, t
-                        )
+                    if do_classifier_free_guidance and guidance_rescale > 0.0:
+                        # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                        noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
-                        # predict the noise residual
-                        noise_pred = self.unet(
-                            latent_model_input,
-                            t,
-                            encoder_hidden_states=prompt_embeds,
-                            cross_attention_kwargs=cross_attention_kwargs,
-                            return_dict=False,
-                        )[0]
+                    # compute the previous noisy sample x_t -> x_t-1
+                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
-                        # perform guidance
-                        if do_classifier_free_guidance:
-                            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                            noise_pred = noise_pred_uncond + guidance_scale * (
-                                    noise_pred_text - noise_pred_uncond
-                            )
+                    # call the callback, if provided
+                    if i == len(timesteps) - 1 or (
+                            (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                    ):
+                        progress_bar.update()
+                        if callback is not None and i % callback_steps == 0:
+                            callback(i, t, latents)
 
-                        if do_classifier_free_guidance and guidance_rescale > 0.0:
-                            # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                            noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+        if not output_type == "latent":
+            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+        else:
+            image = latents
+            has_nsfw_concept = None
 
-                        # compute the previous noisy sample x_t -> x_t-1
-                        latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+        if has_nsfw_concept is None:
+            do_denormalize = [True] * image.shape[0]
+        else:
+            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-                        # call the callback, if provided
-                        if i == len(timesteps) - 1 or (
-                                (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                        ):
-                            progress_bar.update()
-                            if callback is not None and i % callback_steps == 0:
-                                callback(i, t, latents)
+        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
 
-            if not output_type == "latent":
-                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-                image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-            else:
-                image = latents
-                has_nsfw_concept = None
-            
-            if has_nsfw_concept is None:
-                do_denormalize = [True] * image.shape[0]
-            else:
-                do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
+        # Offload all models
+        self.maybe_free_model_hooks()
 
-            image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        if not return_dict:
+            return (image, has_nsfw_concept)
 
-            # Offload all models
-            self.maybe_free_model_hooks()
-
-
-            if not return_dict:
-                return (image, has_nsfw_concept)
-
-            return StableDiffusionPipelineOutput(
-                images=image, nsfw_content_detected=has_nsfw_concept
-            )
-        except Exception as e:
-            print(e)
-            raise ValueError from e
-            # import pdb
-            # pdb.set_trace()     
-
+        return StableDiffusionPipelineOutput(
+            images=image, nsfw_content_detected=has_nsfw_concept
+        )
 
     def _syngen_step(
             self,
@@ -359,7 +355,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             cross_attention_kwargs,
             prompt,
             subtrees_indices,
-            max_iter_to_alter=25,
+            num_intervention_steps,
     ):
         with torch.enable_grad():
             latents = latents.clone().detach().requires_grad_(True)
@@ -381,7 +377,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 attention_maps = self._aggregate_and_get_attention_maps_per_token()
                 loss = self._compute_loss(attention_maps=attention_maps, prompt=prompt, subtrees_indices=subtrees_indices)
                 # Perform gradient update
-                if i < max_iter_to_alter:
+                if i < num_intervention_steps:
                     if loss != 0:
                         latent = self._update_latent(
                             latents=latent, loss=loss, step_size=step_size
@@ -403,7 +399,6 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         return loss
 
-
     def _attribution_loss(
             self,
             attention_maps: List[torch.Tensor],
@@ -420,14 +415,24 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         for subtree_indices in subtrees_indices:
             noun, modifier = split_indices(subtree_indices)
             all_subtree_pairs = list(itertools.product(noun, modifier))
-            positive_loss, negative_loss = self._calculate_losses(
-                attention_maps,
-                all_subtree_pairs,
-                subtree_indices,
-                attn_map_idx_to_wp,
-            )
-            loss += positive_loss
-            loss += negative_loss
+            if noun and not modifier:
+                if isinstance(noun, list) and len(noun) == 1:
+                    processed_noun = noun[0]
+                else:
+                    processed_noun = noun
+                loss += calculate_negative_loss(
+                        attention_maps, modifier, processed_noun, subtree_indices, attn_map_idx_to_wp
+                    )
+            else:
+                positive_loss, negative_loss = self._calculate_losses(
+                    attention_maps,
+                    all_subtree_pairs,
+                    subtree_indices,
+                    attn_map_idx_to_wp,
+                )
+
+                loss += positive_loss
+                loss += negative_loss
 
         return loss
 
@@ -478,17 +483,18 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                         continue
 
                     wp = wp.replace(wordpiece_token, "")
-                    if member.text == wp:
+                    if member.text.lower() == wp.lower():
                         if idx not in curr_collected_wp_indices and idx not in collected_spacy_indices:
                             curr_collected_wp_indices.append(idx)
                             break
                     # take care of wordpieces that are split up
-                    elif member.text.startswith(wp) and wp != member.text:  # can maybe be while loop
+                    elif member.text.lower().startswith(wp.lower()) and wp.lower() != member.text.lower():  # can maybe be while loop
                         wp_indices = align_wordpieces_indices(
                             wordpieces2indices, idx, member.text
                         )
                         # check if all wp_indices are not already in collected_spacy_indices
-                        if wp_indices and (wp_indices not in curr_collected_wp_indices) and all([wp_idx not in collected_spacy_indices for wp_idx in wp_indices]):
+                        if wp_indices and (wp_indices not in curr_collected_wp_indices) and all(
+                                [wp_idx not in collected_spacy_indices for wp_idx in wp_indices]):
                             curr_collected_wp_indices.append(wp_indices)
                             break
 
@@ -499,10 +505,12 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 else:
                     collected_spacy_indices.add(collected_idx)
 
-            paired_indices.append(curr_collected_wp_indices)
+            if curr_collected_wp_indices:
+                paired_indices.append(curr_collected_wp_indices)
+            else:
+                print(f"No wordpieces were aligned for {pair} in _align_indices")
 
         return paired_indices
-
 
     def _extract_attribution_indices(self, prompt):
         """
@@ -511,18 +519,38 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         doc = self.parser(prompt)
 
+        modifier_indices = []
         # extract standard attribution indices
-        pairs = extract_attribution_indices(doc)
+        modifier_sets_1 = extract_attribution_indices(self.doc, self.include_nummod)
+        modifier_indices_1 = self._align_indices(prompt, modifier_sets_1)
+        if modifier_indices_1:
+            modifier_indices.append(modifier_indices_1)
 
         # extract attribution indices with verbs in between
-        pairs_2 = extract_attribution_indices_with_verb_root(doc)
-        pairs_3 = extract_attribution_indices_with_verbs(doc)
+        modifier_sets_2 = extract_attribution_indices_with_verb_root(self.doc, self.include_nummod)
+        modifier_indices_2 = self._align_indices(prompt, modifier_sets_2)
+        if modifier_indices_2:
+            modifier_indices.append(modifier_indices_2)
+
+        modifier_sets_3 = extract_attribution_indices_with_verbs(self.doc, self.include_nummod)
+        modifier_indices_3 = self._align_indices(prompt, modifier_sets_3)
+        if modifier_indices_3:
+            modifier_indices.append(modifier_indices_3)
+
+        # entities only
+        if self.include_entities:
+            modifier_sets_4 = extract_entities_only(self.doc)
+            modifier_indices_4 = self._align_indices(prompt, modifier_sets_4)
+            modifier_indices.append(modifier_indices_4)
 
         # make sure there are no duplicates
-        pairs = unify_lists(pairs, pairs_2, pairs_3)
+        modifier_indices = unify_lists(modifier_indices)
 
-        paired_indices = self._align_indices(prompt, pairs)
-        return paired_indices
+        # remove all indices greater than 77:
+        modifier_indices = truncate_extracted_indices(modifier_indices)
+        print(f"Final modifier indices collected:{modifier_indices}")
+        return modifier_indices
+
 
 def _get_attention_maps_list(
         attention_maps: torch.Tensor
@@ -534,39 +562,58 @@ def _get_attention_maps_list(
 
     return attention_maps_list
 
-def is_sublist(list_1: List[str], list_2: List[str]) -> bool:
-    """
-    This function checks if one `list_1` is a sublist of another `list_2`
-    """
 
-    return len(list_1) < len(list_2) and all(item in list_2 for item in list_1)
+def unify_lists(list_of_lists):
+    def flatten(lst):
+        for elem in lst:
+            if isinstance(elem, list):
+                yield from flatten(elem)
+            else:
+                yield elem
 
-def unify_lists(*all_lists) -> List[str]:
-    """
-    Combines lists from different
-    """
+    def have_common_element(lst1, lst2):
+        flat_list1 = set(flatten(lst1))
+        flat_list2 = set(flatten(lst2))
+        return not flat_list1.isdisjoint(flat_list2)
 
-    flattened_lists = [item for lst in all_lists for item in lst]
-    sorted_list = sorted(flattened_lists, key=len)
-    seen = set()
+    lst = []
+    for l in list_of_lists:
+        lst += l
+    changed = True
+    while changed:
+        changed = False
+        merged_list = []
+        while lst:
+            first = lst.pop(0)
+            was_merged = False
+            for index, other in enumerate(lst):
+                if have_common_element(first, other):
+                    # If we merge, we should flatten the other list but not first
+                    new_merged = first + [item for item in other if item not in first]
+                    lst[index] = new_merged
+                    changed = True
+                    was_merged = True
+                    break
+            if not was_merged:
+                merged_list.append(first)
+        lst = merged_list
 
-    result = []
+    return lst
 
-    for i in range(len(sorted_list)):
-        if tuple(sorted_list[i]) in seen:  # Skip if already added
-            continue
 
-        sublist_to_add = True
-        for j in range(i + 1, len(sorted_list)):
-            if is_sublist(sorted_list[i], sorted_list[j]):
-                sublist_to_add = False
-                break
+def truncate_extracted_indices(nested_list):
+    filtered_list = []
+    for element in nested_list:
+        if isinstance(element, list):  # If it's a list, apply the function recursively
+            filtered_sublist = truncate_extracted_indices(element)
+            if filtered_sublist:  # Only add non-empty lists
+                filtered_list.append(filtered_sublist)
+        elif element <= last_token_idx:  # If it's a number less than or equal to 76, keep it
+            filtered_list.append(element)
 
-        if sublist_to_add:
-            result.append(sorted_list[i])
-            seen.add(tuple(sorted_list[i]))
+    return filtered_list
 
-    return result
+
 
 start_token = "<|startoftext|>"
 end_token = "<|endoftext|>"
@@ -607,12 +654,8 @@ def _symmetric_kl(attention_map1, attention_map2):
     if len(attention_map2.shape) > 1:
         attention_map2 = attention_map2.reshape(-1)
 
-    try:
-        p = dist.Categorical(probs=attention_map1)
-        q = dist.Categorical(probs=attention_map2)
-    except:
-        q = dist.Categorical(probs=attention_map2)
-        raise ValueError("bop")
+    p = dist.Categorical(probs=attention_map1)
+    q = dist.Categorical(probs=attention_map2)
 
     kl_divergence_pq = dist.kl_divergence(p, q)
     kl_divergence_qp = dist.kl_divergence(q, p)
@@ -697,11 +740,11 @@ def align_wordpieces_indices(
 
     # Run over the next wordpieces in the sequence (which is why we use +1)
     for wp_idx in range(start_idx + 1, len(wordpieces2indices)):
-        if wp == target_word:
+        if wp.lower() == target_word.lower():
             break
 
         wp2 = wordpieces2indices[wp_idx].replace(wordpiece_token, "")
-        if target_word.startswith(wp + wp2) and wp2 != target_word:
+        if target_word.lower().startswith(wp.lower() + wp2.lower()) and wp2.lower() != target_word.lower():
             wp += wordpieces2indices[wp_idx].replace(wordpiece_token, "")
             wp_indices.append(wp_idx)
         else:
@@ -779,10 +822,11 @@ def extract_attribution_indices_with_verb_root(doc):
     This function specifically addresses cases where a verb is between
        a noun and its modifier. For instance: "a dog that is red"
        here, the aux is between 'dog' and 'red'.
-       """
+    """
 
     subtrees = []
     modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp"]
+
     for w in doc:
         subtree = []
         stack = []
@@ -814,23 +858,43 @@ def extract_attribution_indices_with_verb_root(doc):
             subtrees.append(subtree)
     return subtrees
 
+
+def extract_entities_only(doc):
+    entities = []
+    for w in doc:
+        if w.pos_ in ['NOUN', 'PROPN']:
+            entities.append([w])
+    return entities
+
+
 def calculate_negative_loss(
         attention_maps, modifier, noun, subtree_indices, attn_map_idx_to_wp
 ):
     outside_indices = _get_outside_indices(subtree_indices, attn_map_idx_to_wp)
-    negative_modifier_loss, num_modifier_pairs = _calculate_outside_loss(
-        attention_maps, modifier, outside_indices
-    )
+
     negative_noun_loss, num_noun_pairs = _calculate_outside_loss(
         attention_maps, noun, outside_indices
     )
+    if outside_indices:
+      negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
+    else:
+      negative_noun_loss = 0
 
-    negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
-    negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
+    if modifier:
+        negative_modifier_loss, num_modifier_pairs = _calculate_outside_loss(
+            attention_maps, modifier, outside_indices
+        )
+        if outside_indices:
+          negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
+        else:
+          negative_modifier_loss = 0
 
-    negative_loss = (negative_modifier_loss + negative_noun_loss) / 2
+        negative_loss = (negative_modifier_loss + negative_noun_loss) / 2
+    else:
+        negative_loss = negative_noun_loss
 
     return negative_loss
+
 
 def get_indices(tokenizer, prompt: str) -> Dict[str, int]:
     """Utility function to list the indices of the tokens you wish to alter"""
@@ -855,4 +919,3 @@ def get_attention_map_index_to_wordpiece(tokenizer, prompt):
         attn_map_idx_to_wp[i] = wordpiece
 
     return attn_map_idx_to_wp
-
