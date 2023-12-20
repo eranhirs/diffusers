@@ -22,7 +22,7 @@ You can find additional information about SynGen on the [project page](https://r
 
 <Tip>
 
-SynGen is based on the dependency parsing of [spaCy](https://spacy.io/usage), which is not downloaded with `diffusers``. To use this pipeline, you have to run the following commands:
+SynGen is based on the dependency parsing of [spaCy](https://spacy.io/usage), which is not downloaded with `diffusers`. To use this pipeline, you have to run the following commands:
 1. `pip install spacy`
 2. `python -m spacy download en_core_web_trf`
 
