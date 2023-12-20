@@ -457,8 +457,11 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
     def _load_parser(self):
         if self.parser is None:
-            import spacy
-            self.parser = spacy.load("en_core_web_trf")
+            try:
+                import spacy
+                self.parser = spacy.load("en_core_web_trf")
+            except ImportError as e:
+                raise ImportError("Running this pipeline requires the `spacy` package to be installed. Run `pip install spacy`.") from e
 
     def _calculate_losses(
             self,
