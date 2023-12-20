@@ -24,11 +24,12 @@ from ...models import AutoencoderKL, UNet2DConditionModel
 from ...schedulers import KarrasDiffusionSchedulers
 from ...models.attention_processor import Attention
 from ...utils import logging, replace_example_docstring
-from . import StableDiffusionPipelineOutput, StableDiffusionSafetyChecker, StableDiffusionPipeline
-from .pipeline_stable_diffusion import (
-    EXAMPLE_DOC_STRING,
-    rescale_noise_cfg
+from . import (
+    StableDiffusionPipelineOutput,
+    StableDiffusionSafetyChecker,
+    StableDiffusionPipeline,
 )
+from .pipeline_stable_diffusion import EXAMPLE_DOC_STRING, rescale_noise_cfg
 
 
 logger = logging.get_logger(__name__)
