@@ -304,6 +304,8 @@
       title: Semantic Guidance
     - local: api/pipelines/shap_e
       title: Shap-E
+    - local: api/pipelines/syngen
+      title: SynGen
     - sections:
       - local: api/pipelines/stable_diffusion/overview
         title: Overview
