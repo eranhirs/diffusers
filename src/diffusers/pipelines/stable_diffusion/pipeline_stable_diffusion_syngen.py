@@ -293,44 +293,44 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                         num_intervention_steps=num_intervention_steps,
                     )
 
-                    # expand the latents if we are doing classifier free guidance
-                    latent_model_input = (
-                        torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                # expand the latents if we are doing classifier free guidance
+                latent_model_input = (
+                    torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                )
+                latent_model_input = self.scheduler.scale_model_input(
+                    latent_model_input, t
+                )
+
+                # predict the noise residual
+                noise_pred = self.unet(
+                    latent_model_input,
+                    t,
+                    encoder_hidden_states=prompt_embeds,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    return_dict=False,
+                )[0]
+
+                # perform guidance
+                if do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                            noise_pred_text - noise_pred_uncond
                     )
-                    latent_model_input = self.scheduler.scale_model_input(
-                        latent_model_input, t
-                    )
 
-                    # predict the noise residual
-                    noise_pred = self.unet(
-                        latent_model_input,
-                        t,
-                        encoder_hidden_states=prompt_embeds,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        return_dict=False,
-                    )[0]
+                if do_classifier_free_guidance and guidance_rescale > 0.0:
+                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                    noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
-                    # perform guidance
-                    if do_classifier_free_guidance:
-                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                        noise_pred = noise_pred_uncond + guidance_scale * (
-                                noise_pred_text - noise_pred_uncond
-                        )
+                # compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
-                    if do_classifier_free_guidance and guidance_rescale > 0.0:
-                        # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                        noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
-
-                    # compute the previous noisy sample x_t -> x_t-1
-                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-
-                    # call the callback, if provided
-                    if i == len(timesteps) - 1 or (
-                            (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                    ):
-                        progress_bar.update()
-                        if callback is not None and i % callback_steps == 0:
-                            callback(i, t, latents)
+                # call the callback, if provided
+                if i == len(timesteps) - 1 or (
+                        (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
+                    progress_bar.update()
+                    if callback is not None and i % callback_steps == 0:
+                        callback(i, t, latents)
 
         if not output_type == "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
@@ -459,7 +459,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 import spacy
                 self.parser = spacy.load("en_core_web_trf")
             except ImportError as e:
-                raise ImportError("Running this pipeline requires the `spacy` package to be installed. Run `pip install spacy`.") from e
+                raise ImportError("Running this pipeline requires the `spacy` package to be installed and the `en_core_web_tf` model to be downloaded. See https://spacy.io/usage/models for more details.") from e
 
     def _calculate_losses(
             self,
