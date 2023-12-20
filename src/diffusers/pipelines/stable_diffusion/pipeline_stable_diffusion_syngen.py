@@ -36,18 +36,27 @@ logger = logging.get_logger(__name__)
 
 
 class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
-    def __init__(self,
-                 vae: AutoencoderKL,
-                 text_encoder: CLIPTextModel,
-                 tokenizer: CLIPTokenizer,
-                 unet: UNet2DConditionModel,
-                 scheduler: KarrasDiffusionSchedulers,
-                 safety_checker: StableDiffusionSafetyChecker,
-                 feature_extractor: CLIPImageProcessor,
-                 requires_safety_checker: bool = True,
-                 ):
-        super().__init__(vae, text_encoder, tokenizer, unet, scheduler, safety_checker, feature_extractor,
-                         requires_safety_checker)
+    def __init__(
+        self,
+        vae: AutoencoderKL,
+        text_encoder: CLIPTextModel,
+        tokenizer: CLIPTokenizer,
+        unet: UNet2DConditionModel,
+        scheduler: KarrasDiffusionSchedulers,
+        safety_checker: StableDiffusionSafetyChecker,
+        feature_extractor: CLIPImageProcessor,
+        requires_safety_checker: bool = True,
+    ):
+        super().__init__(
+            vae,
+            text_encoder,
+            tokenizer,
+            unet,
+            scheduler,
+            safety_checker,
+            feature_extractor,
+            requires_safety_checker,
+        )
 
         self.parser = None
 
@@ -55,15 +64,13 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         attention_maps = self.attention_store.aggregate_attention(
             from_where=("up", "down", "mid"),
         )
-        attention_maps_list = _get_attention_maps_list(
-            attention_maps=attention_maps
-        )
+        attention_maps_list = _get_attention_maps_list(attention_maps=attention_maps)
         return attention_maps_list
 
     @staticmethod
-    def _update_latent(
-            latents: torch.Tensor, loss: torch.Tensor, step_size: float
-    ) -> torch.Tensor:
+    def _update_latent(latents: torch.Tensor, loss: torch.Tensor, step_size: float) -> (
+        torch.Tensor
+    ):
         """Update the latent according to the computed loss."""
         grad_cond = torch.autograd.grad(
             loss.requires_grad_(True), [latents], retain_graph=True
@@ -96,30 +103,30 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-            self,
-            prompt: Union[str, List[str]] = None,
-            height: Optional[int] = None,
-            width: Optional[int] = None,
-            num_inference_steps: int = 50,
-            guidance_scale: float = 7.5,
-            negative_prompt: Optional[Union[str, List[str]]] = None,
-            num_images_per_prompt: Optional[int] = 1,
-            eta: float = 0.0,
-            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-            latents: Optional[torch.FloatTensor] = None,
-            prompt_embeds: Optional[torch.FloatTensor] = None,
-            negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-            output_type: Optional[str] = "pil",
-            return_dict: bool = True,
-            callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-            callback_steps: int = 1,
-            cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-            guidance_rescale: float = 0.0,
-            attn_res=None,
-            subtrees_indices: Optional[List[List[str]]] = None,
-            syngen_step_size: float = 20.0,
-            num_intervention_steps: int = 25,
-            include_entities: bool = False
+        self,
+        prompt: Union[str, List[str]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: Optional[int] = 1,
+        eta: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.FloatTensor] = None,
+        prompt_embeds: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
+        callback_steps: int = 1,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        guidance_rescale: float = 0.0,
+        attn_res=None,
+        subtrees_indices: Optional[List[List[str]]] = None,
+        syngen_step_size: float = 20.0,
+        num_intervention_steps: int = 25,
+        include_entities: bool = False,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -229,7 +236,9 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
-            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
+            cross_attention_kwargs.get("scale", None)
+            if cross_attention_kwargs is not None
+            else None
         )
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
@@ -274,7 +283,9 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         self.register_attention_control()
 
         text_embeddings = (
-            prompt_embeds[batch_size * num_images_per_prompt:] if do_classifier_free_guidance else prompt_embeds
+            prompt_embeds[batch_size * num_images_per_prompt :]
+            if do_classifier_free_guidance
+            else prompt_embeds
         )
 
         # 7. Denoising loop
@@ -298,7 +309,9 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
                     # expand the latents if we are doing classifier free guidance
                     latent_model_input = (
-                        torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                        torch.cat([latents] * 2)
+                        if do_classifier_free_guidance
+                        else latents
                     )
                     latent_model_input = self.scheduler.scale_model_input(
                         latent_model_input, t
@@ -317,27 +330,38 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                     if do_classifier_free_guidance:
                         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                         noise_pred = noise_pred_uncond + guidance_scale * (
-                                noise_pred_text - noise_pred_uncond
+                            noise_pred_text - noise_pred_uncond
                         )
 
                     if do_classifier_free_guidance and guidance_rescale > 0.0:
                         # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
-                        noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
+                        noise_pred = rescale_noise_cfg(
+                            noise_pred,
+                            noise_pred_text,
+                            guidance_rescale=guidance_rescale,
+                        )
 
                     # compute the previous noisy sample x_t -> x_t-1
-                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                    latents = self.scheduler.step(
+                        noise_pred, t, latents, **extra_step_kwargs, return_dict=False
+                    )[0]
 
                     # call the callback, if provided
                     if i == len(timesteps) - 1 or (
-                            (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                        (i + 1) > num_warmup_steps
+                        and (i + 1) % self.scheduler.order == 0
                     ):
                         progress_bar.update()
                         if callback is not None and i % callback_steps == 0:
                             callback(i, t, latents)
 
         if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
+            image = self.vae.decode(
+                latents / self.vae.config.scaling_factor, return_dict=False
+            )[0]
+            image, has_nsfw_concept = self.run_safety_checker(
+                image, device, prompt_embeds.dtype
+            )
         else:
             image = latents
             has_nsfw_concept = None
@@ -347,7 +371,9 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         else:
             do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        image = self.image_processor.postprocess(
+            image, output_type=output_type, do_denormalize=do_denormalize
+        )
 
         # Offload all models
         self.maybe_free_model_hooks()
@@ -360,17 +386,17 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         )
 
     def _syngen_step(
-            self,
-            latents,
-            text_embeddings,
-            t,
-            i,
-            step_size,
-            cross_attention_kwargs,
-            prompt,
-            subtrees_indices,
-            include_entities: bool,
-            num_intervention_steps: int,
+        self,
+        latents,
+        text_embeddings,
+        t,
+        i,
+        step_size,
+        cross_attention_kwargs,
+        prompt,
+        subtrees_indices,
+        include_entities: bool,
+        num_intervention_steps: int,
     ):
         with torch.enable_grad():
             latents = latents.clone().detach().requires_grad_(True)
@@ -390,17 +416,19 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 self.unet.zero_grad()
                 # Get attention maps
                 attention_maps = self._aggregate_and_get_attention_maps_per_token()
-                loss = self._compute_loss(attention_maps=attention_maps,
-                                          prompt=prompt,
-                                          subtrees_indices=subtrees_indices,
-                                          include_entities=include_entities)
+                loss = self._compute_loss(
+                    attention_maps=attention_maps,
+                    prompt=prompt,
+                    subtrees_indices=subtrees_indices,
+                    include_entities=include_entities,
+                )
                 # Perform gradient update
                 if i < num_intervention_steps:
                     if loss != 0:
                         latent = self._update_latent(
                             latents=latent, loss=loss, step_size=step_size
                         )
-                    logger.info(f"Iteration {i} | Loss: {loss:0.4f}")
+                    logger.info(f"NOT_YET_IMPLEMENTED_ExprJoinedStr")
 
             updated_latents.append(latent)
 
@@ -409,27 +437,39 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
         return latents
 
     def _compute_loss(
-            self, attention_maps: List[torch.Tensor], prompt: Union[str, List[str]],
-            subtrees_indices,
-            include_entities: bool
+        self,
+        attention_maps: List[torch.Tensor],
+        prompt: Union[str, List[str]],
+        subtrees_indices,
+        include_entities: bool,
     ) -> torch.Tensor:
-        attn_map_idx_to_wp = get_attention_map_index_to_wordpiece(self.tokenizer, prompt)
-        loss = self._attribution_loss(attention_maps, prompt, attn_map_idx_to_wp, subtrees_indices, include_entities)
+        attn_map_idx_to_wp = get_attention_map_index_to_wordpiece(
+            self.tokenizer, prompt
+        )
+        loss = self._attribution_loss(
+            attention_maps,
+            prompt,
+            attn_map_idx_to_wp,
+            subtrees_indices,
+            include_entities,
+        )
 
         return loss
 
     def _attribution_loss(
-            self,
-            attention_maps: List[torch.Tensor],
-            prompt: Union[str, List[str]],
-            attn_map_idx_to_wp,
-            subtrees_indices,
-            include_entities: bool
+        self,
+        attention_maps: List[torch.Tensor],
+        prompt: Union[str, List[str]],
+        attn_map_idx_to_wp,
+        subtrees_indices,
+        include_entities: bool,
     ) -> torch.Tensor:
         if not subtrees_indices:
             self._load_parser()
 
-            subtrees_indices = self._extract_attribution_indices(prompt, include_entities)
+            subtrees_indices = self._extract_attribution_indices(
+                prompt, include_entities
+            )
         loss = 0
 
         for subtree_indices in subtrees_indices:
@@ -441,8 +481,12 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 else:
                     processed_noun = noun
                 loss += calculate_negative_loss(
-                        attention_maps, modifier, processed_noun, subtree_indices, attn_map_idx_to_wp
-                    )
+                    attention_maps,
+                    modifier,
+                    processed_noun,
+                    subtree_indices,
+                    attn_map_idx_to_wp,
+                )
             else:
                 positive_loss, negative_loss = self._calculate_losses(
                     attention_maps,
@@ -462,14 +506,16 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                 import spacy
                 self.parser = spacy.load("en_core_web_trf")
             except ImportError as e:
-                raise ImportError("Running this pipeline requires the `spacy` package to be installed. Run `pip install spacy`.") from e
+                raise ImportError(
+                    "Running this pipeline requires the `spacy` package to be installed. Run `pip install spacy`."
+                ) from e
 
     def _calculate_losses(
-            self,
-            attention_maps,
-            all_subtree_pairs,
-            subtree_indices,
-            attn_map_idx_to_wp,
+        self,
+        attention_maps,
+        all_subtree_pairs,
+        subtree_indices,
+        attn_map_idx_to_wp,
     ):
         positive_loss = []
         negative_loss = []
@@ -492,14 +538,10 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
     def _align_indices(self, prompt, spacy_pairs):
         wordpieces2indices = get_indices(self.tokenizer, prompt)
         paired_indices = []
-        collected_spacy_indices = (
-            set()
-        )  # helps track recurring nouns across different relations (i.e., cases where there is more than one instance of the same word)
+        collected_spacy_indices = set()  # helps track recurring nouns across different relations (i.e., cases where there is more than one instance of the same word)
 
         for pair in spacy_pairs:
-            curr_collected_wp_indices = (
-                []
-            )  # helps track which nouns and amods were added to the current pair (this is useful in sentences with repeating amod on the same relation (e.g., "a red red red bear"))
+            curr_collected_wp_indices = []  # helps track which nouns and amods were added to the current pair (this is useful in sentences with repeating amod on the same relation (e.g., "a red red red bear"))
             for member in pair:
                 for idx, wp in wordpieces2indices.items():
                     if wp in [start_token, end_token]:
@@ -507,17 +549,28 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
                     wp = wp.replace(wordpiece_token, "")
                     if member.text.lower() == wp.lower():
-                        if idx not in curr_collected_wp_indices and idx not in collected_spacy_indices:
+                        if (
+                            idx not in curr_collected_wp_indices
+                            and idx not in collected_spacy_indices
+                        ):
                             curr_collected_wp_indices.append(idx)
                             break
                     # take care of wordpieces that are split up
-                    elif member.text.lower().startswith(wp.lower()) and wp.lower() != member.text.lower():  # can maybe be while loop
+                    elif member.text.lower().startswith(
+                        wp.lower()
+                    ) and wp.lower() != member.text.lower():  # can maybe be while loop
                         wp_indices = align_wordpieces_indices(
                             wordpieces2indices, idx, member.text
                         )
                         # check if all wp_indices are not already in collected_spacy_indices
-                        if wp_indices and (wp_indices not in curr_collected_wp_indices) and all(
-                                wp_idx not in collected_spacy_indices for wp_idx in wp_indices):
+                        if (
+                            wp_indices
+                            and (wp_indices not in curr_collected_wp_indices)
+                            and all(
+                                wp_idx not in collected_spacy_indices
+                                for wp_idx in wp_indices
+                            )
+                        ):
                             curr_collected_wp_indices.append(wp_indices)
                             break
 
@@ -531,7 +584,7 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
             if curr_collected_wp_indices:
                 paired_indices.append(curr_collected_wp_indices)
             else:
-                print(f"No wordpieces were aligned for {pair} in _align_indices")
+                print(f"NOT_YET_IMPLEMENTED_ExprJoinedStr")
 
         return paired_indices
 
@@ -568,14 +621,12 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
 
         # make sure there are no duplicates
         modifier_indices = unify_lists(modifier_indices)
-        print(f"Final modifier indices collected:{modifier_indices}")
+        print(f"NOT_YET_IMPLEMENTED_ExprJoinedStr")
 
         return modifier_indices
 
 
-def _get_attention_maps_list(
-        attention_maps: torch.Tensor
-) -> List[torch.Tensor]:
+def _get_attention_maps_list(attention_maps: torch.Tensor) -> List[torch.Tensor]:
     attention_maps *= 100
     attention_maps_list = [
         attention_maps[:, :, i] for i in range(attention_maps.shape[2])
@@ -631,7 +682,8 @@ def _get_outside_indices(subtree_indices, attn_map_idx_to_wp):
     flattened_subtree_indices = _flatten_indices(subtree_indices)
     outside_indices = [
         map_idx
-        for map_idx in attn_map_idx_to_wp.keys() if (map_idx not in flattened_subtree_indices)
+        for map_idx in attn_map_idx_to_wp.keys()
+        if (map_idx not in flattened_subtree_indices)
     ]
     return outside_indices
 
@@ -713,9 +765,7 @@ def _calculate_outside_loss(attention_maps, src_indices, outside_loss):
                 pair_key = (t, outside_idx)
                 if pair_key not in computed_pairs:
                     wp_neg_loss.append(
-                        _symmetric_kl(
-                            attention_maps[t], attention_maps[outside_idx]
-                        )
+                        _symmetric_kl(attention_maps[t], attention_maps[outside_idx])
                     )
                     computed_pairs.add(pair_key)
             negative_loss.append(max(wp_neg_loss) if wp_neg_loss else 0)
@@ -735,9 +785,7 @@ def _calculate_outside_loss(attention_maps, src_indices, outside_loss):
     return negative_loss, pair_counter
 
 
-def align_wordpieces_indices(
-        wordpieces2indices, start_idx, target_word
-):
+def align_wordpieces_indices(wordpieces2indices, start_idx, target_word):
     """
     Aligns a `target_word` that contains more than one wordpiece (the first wordpiece is `start_idx`)
     """
@@ -751,13 +799,13 @@ def align_wordpieces_indices(
             break
 
         wp2 = wordpieces2indices[wp_idx].replace(wordpiece_token, "")
-        if target_word.lower().startswith(wp.lower() + wp2.lower()) and wp2.lower() != target_word.lower():
+        if target_word.lower().startswith(
+            wp.lower() + wp2.lower()
+        ) and wp2.lower() != target_word.lower():
             wp += wordpieces2indices[wp_idx].replace(wordpiece_token, "")
             wp_indices.append(wp_idx)
         else:
-            wp_indices = (
-                []
-            )  # if there's no match, you want to clear the list and finish
+            wp_indices = []  # if there's no match, you want to clear the list and finish
             break
 
     return wp_indices
@@ -791,6 +839,7 @@ def extract_attribution_indices(doc):
             subtrees.append(subtree)
     return subtrees
 
+
 def extract_attribution_indices_with_verbs(doc):
     """
     This function specifically addresses cases where a verb is between
@@ -799,8 +848,7 @@ def extract_attribution_indices_with_verbs(doc):
     """
 
     subtrees = []
-    modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp",
-                 'relcl']
+    modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp", "relcl"]
     for w in doc:
         if w.pos_ not in ["NOUN", "PROPN"] or w.dep_ in modifiers:
             continue
@@ -808,7 +856,7 @@ def extract_attribution_indices_with_verbs(doc):
         stack = []
         for child in w.children:
             if child.dep_ in modifiers:
-                if child.pos_ not in ['AUX', 'VERB']:
+                if child.pos_ not in ["AUX", "VERB"]:
                     subtree.append(child)
                 stack.extend(child.children)
 
@@ -816,13 +864,14 @@ def extract_attribution_indices_with_verbs(doc):
             node = stack.pop()
             if node.dep_ in modifiers or node.dep_ == "conj":
                 # we don't want to add 'is' or other verbs to the loss, we want their children
-                if node.pos_ not in ['AUX', 'VERB']:
+                if node.pos_ not in ["AUX", "VERB"]:
                     subtree.append(node)
                 stack.extend(node.children)
         if subtree:
             subtree.append(w)
             subtrees.append(subtree)
         return subtrees
+
 
 def extract_attribution_indices_with_verb_root(doc):
     """
@@ -839,12 +888,12 @@ def extract_attribution_indices_with_verb_root(doc):
         stack = []
 
         # if w is a verb/aux and has a noun child and a modifier child, add them to the stack
-        if w.pos_ != 'AUX' or w.dep_ in modifiers:
+        if w.pos_ != "AUX" or w.dep_ in modifiers:
             continue
 
         for child in w.children:
-            if child.dep_ in modifiers or child.pos_ in ['NOUN', 'PROPN']:
-                if child.pos_ not in ['AUX', 'VERB']:
+            if child.dep_ in modifiers or child.pos_ in ["NOUN", "PROPN"]:
+                if child.pos_ not in ["AUX", "VERB"]:
                     subtree.append(child)
                 stack.extend(child.children)
         # did not find a pair of noun and modifier
@@ -855,12 +904,12 @@ def extract_attribution_indices_with_verb_root(doc):
             node = stack.pop()
             if node.dep_ in modifiers or node.dep_ == "conj":
                 # we don't want to add 'is' or other verbs to the loss, we want their children
-                if node.pos_ not in ['AUX']:
+                if node.pos_ not in ["AUX"]:
                     subtree.append(node)
                 stack.extend(node.children)
 
         if subtree:
-            if w.pos_ not in ['AUX']:
+            if w.pos_ not in ["AUX"]:
                 subtree.append(w)
             subtrees.append(subtree)
     return subtrees
@@ -869,13 +918,13 @@ def extract_attribution_indices_with_verb_root(doc):
 def extract_entities_only(doc):
     entities = []
     for w in doc:
-        if w.pos_ in ['NOUN', 'PROPN']:
+        if w.pos_ in ["NOUN", "PROPN"]:
             entities.append([w])
     return entities
 
 
 def calculate_negative_loss(
-        attention_maps, modifier, noun, subtree_indices, attn_map_idx_to_wp
+    attention_maps, modifier, noun, subtree_indices, attn_map_idx_to_wp
 ):
     outside_indices = _get_outside_indices(subtree_indices, attn_map_idx_to_wp)
 
@@ -883,18 +932,18 @@ def calculate_negative_loss(
         attention_maps, noun, outside_indices
     )
     if outside_indices:
-      negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
+        negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
     else:
-      negative_noun_loss = 0
+        negative_noun_loss = 0
 
     if modifier:
         negative_modifier_loss, num_modifier_pairs = _calculate_outside_loss(
             attention_maps, modifier, outside_indices
         )
         if outside_indices:
-          negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
+            negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
         else:
-          negative_modifier_loss = 0
+            negative_modifier_loss = 0
 
         negative_loss = (negative_modifier_loss + negative_noun_loss) / 2
     else:
@@ -907,12 +956,10 @@ def get_indices(tokenizer, prompt: str) -> Dict[str, int]:
     """Utility function to list the indices of the tokens you wish to alter"""
     ids = tokenizer(prompt).input_ids
     indices = {
-        i: tok
-        for tok, i in zip(
-            tokenizer.convert_ids_to_tokens(ids), range(len(ids))
-        )
+        i: tok for tok, i in zip(tokenizer.convert_ids_to_tokens(ids), range(len(ids)))
     }
     return indices
+
 
 def get_attention_map_index_to_wordpiece(tokenizer, prompt):
     attn_map_idx_to_wp = {}
@@ -957,7 +1004,9 @@ class AttentionStore:
         attention_maps = self.get_average_attention()
         for location in from_where:
             for item in attention_maps[location]:
-                cross_maps = item.reshape(-1, self.attn_res[0], self.attn_res[1], item.shape[-1])
+                cross_maps = item.reshape(
+                    -1, self.attn_res[0], self.attn_res[1], item.shape[-1]
+                )
                 out.append(cross_maps)
         out = torch.cat(out, dim=0)
         out = out.sum(0) / out.shape[0]
@@ -987,14 +1036,26 @@ class AttendExciteAttnProcessor:
         self.attnstore = attnstore
         self.place_in_unet = place_in_unet
 
-    def __call__(self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def __call__(
+        self,
+        attn: Attention,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+    ):
         batch_size, sequence_length, _ = hidden_states.shape
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         query = attn.to_q(hidden_states)
 
         is_cross = encoder_hidden_states is not None
-        encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+        encoder_hidden_states = (
+            encoder_hidden_states
+            if encoder_hidden_states is not None
+            else hidden_states
+        )
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
