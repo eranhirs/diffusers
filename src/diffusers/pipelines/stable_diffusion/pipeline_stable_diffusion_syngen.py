@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributions as dist
-from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer
+from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 
 from ...models import AutoencoderKL, UNet2DConditionModel
 from ...models.attention_processor import Attention
@@ -40,10 +40,11 @@ class StableDiffusionSynGenPipeline(StableDiffusionPipeline):
                  scheduler: KarrasDiffusionSchedulers,
                  safety_checker: StableDiffusionSafetyChecker,
                  feature_extractor: CLIPImageProcessor,
+                 image_encoder: CLIPVisionModelWithProjection = None,
                  requires_safety_checker: bool = True,
                  ):
         super().__init__(vae, text_encoder, tokenizer, unet, scheduler, safety_checker, feature_extractor,
-                         requires_safety_checker)
+                         image_encoder, requires_safety_checker)
 
         self.parser = None
 
